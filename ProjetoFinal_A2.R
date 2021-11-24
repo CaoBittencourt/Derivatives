@@ -1,6 +1,7 @@
 # 1. PACOTES --------------------------------------------------------------
 pkg <- c(
   'gghighlight', 'ggthemes', 'viridis', 'patchwork', 'naniar', 'scales' #Visualização
+  # , 'plotly' #Visualização
   , 'GUIDE', 'derivmkts', 'fOptions', 'quantmod', 'BatchGetSymbols', 'GetBCBData' #Finanças
   # , 'simfinR' #, 'simfinapi' 
   , 'lubridate' #Manipulação de Datas
@@ -20,9 +21,9 @@ mutate <- dplyr::mutate
 
 
 # 2. DADOS ----------------------------------------------------------------
-# Escopo (1 semestre)
-DATA.inicial_1 <- Sys.Date() - months(6) - 22 #Para calcular a volatilidade anual sem gerar NA's na primeira data é necessário ter 22 dias a mais de dados no início (i.e. para calcular a rolling volatility de 22 dias)  
-DATA.inicial_2 <- Sys.Date() - months(6)
+# Escopo dos preços = 1 ano (para permitir o cálculo do dividend yield 12m)
+DATA.inicial_1 <- Sys.Date() - months(12) - 22 #Para calcular a volatilidade anual sem gerar NA's na primeira data é necessário ter 22 dias a mais de dados no início (i.e. para calcular a rolling volatility de 22 dias)  
+DATA.inicial_2 <- Sys.Date() - months(12)
 DATA.final <- Sys.Date()
 
 
@@ -31,6 +32,7 @@ DATA.final <- Sys.Date()
 BatchGetSymbols::GetSP500Stocks() -> SP500.stocks
 # BatchGetSymbols::GetFTSE100Stocks() -> FTSE100.stocks
 
+# Lista de tickers
 list(
   # 'IBOV' = IBOV.stocks$tickers
   # , 
@@ -38,6 +40,7 @@ list(
   # , 'FTSE100' = FTSE100.stocks$tickers
 ) -> list.tickers 
 
+# Sufixos do Yahoo Finance
 list(
   # 'IBOV' = '.SA'
   # , 
@@ -55,6 +58,15 @@ Map(
   , suffix = list.suffix
 ) -> list.tickers
 
+
+# Sample ilustrativa de 10x tickers aleatórios
+lapply(
+  list.tickers
+  , function(tickers){
+    
+    sample(tickers, 5) #SP500 -> SP5
+    
+  }) -> list.tickers
 
 # Preços
 lapply(
@@ -118,6 +130,7 @@ DGS3MO %>%
 #     .direction = 'downup'
 #   ) -> risk.free.GBR 
 
+# Lista de taxas de juro
 list(
   # 'IBOV' = risk.free.BRA
   # , 
@@ -125,7 +138,7 @@ list(
   # , 'FTSE100' = risk.free.GBR
 ) -> list.risk.free
 
-
+# Ajustes na lista de taxas de juro
 lapply(
   list.risk.free
   , function(risk.free){
@@ -141,7 +154,6 @@ lapply(
 # Muitos modelos para estimar a volatilidade
 # Modelo mais simples (ingênuo): annualized moving standard deviation (trail 22 dias de sd anualizado)
 # Outros modelos: https://www.valpo.edu/mathematics-statistics/files/2015/07/Estimating-the-Volatility-in-the-Black-Scholes-Formula.pdf
-
 rollvol <- function(
   stock.returns
   , window = 22
@@ -162,13 +174,7 @@ rollvol <- function(
   
 }
 
-
-# list.prices$SP500 %>%
-#   arrange(ref.date) %>%
-#   group_by(ticker) %>%
-#   mutate(volatility = rollvol(ret.closing.prices)) -> list.prices$SP500
-
-
+# Volatilidade = rolling standard deviation (22 dias anualizada)
 lapply(
   list.prices
   , function(stocks){
@@ -180,58 +186,27 @@ lapply(
     
   }) -> list.prices
 
-# Dividend Yield (por simplicidade, supõem-se zero para todas as ações)
+# Dividend Yield
 # getDividends vetorizada para incluir um vetor de tickers
 Vectorize(
   quantmod::getDividends
   , vectorize.args = 'Symbol'
 ) -> vectorized.getDividends
 
-vectorized.getDividends(
-  Symbol = head(list.tickers$SP500)
-  , from = DATA.inicial_2 - years(1)
-  , to = DATA.inicial_2
-  
-) -> list.dividends.USA
-
-# Data frame de dividendos
-Map(
-  function(stock, stock.ticker){
-    
-    colnames(stock) <- 'dividend'
-    
-    stock %>%
-      as_tibble(rownames = 'div.date') %>%
-      mutate(
-        div.date = as_date(div.date)
-        , ticker = stock.ticker
-        , total.div.12m = sum(dividend) 
-      )  
-    
-  }
-  , stock = list.dividends.USA
-  , stock.ticker = names(list.dividends.USA)
-) %>% bind_rows(.) -> df.dividends.USA
-
-# Adicionar dividendos ao data frame de preços e calcular dividend yield = total.dividendos(12m)/preço.ação
-df.dividends.USA %>% 
-  full_join(list.prices$SP500) %>% 
-  mutate(div.yield = total.div.12m/price.close) -> list.prices$SP500
-
-
-# Com lista de tickers
+# Dividendos no último ano (12m)
 lapply(
   list.tickers
   , function(stocks){
     
     vectorized.getDividends(
-      Symbol = head(list.tickers$SP500)
-      , from = DATA.inicial_2 - years(1)
+      Symbol = stocks
+      , from = DATA.inicial_2 - months(12)
       , to = DATA.inicial_2
     )  
     
   }) -> list.dividends
 
+# Data frames de dividendos consolidados por ticker e data
 lapply(
   list.dividends
   , function(stocks){
@@ -253,12 +228,12 @@ lapply(
     ) %>% bind_rows(.)
   }) -> list.dividends
 
+# Data frames de preços e dividendos 
 Map(
   function(dividends, prices){
     
     dividends %>% 
-      full_join(prices) %>% 
-      mutate(div.yield = total.div.12m/price.close)
+      full_join(prices) 
     
   }
   , dividends = list.dividends
@@ -267,75 +242,44 @@ Map(
 
 
 # Opções
-# Get Option Chain vetorizada (talvez não precise disso)
+# Get Option Chain vetorizada
 Vectorize(
   quantmod::getOptionChain
   , vectorize.args = 'Symbols'
 ) -> vectorized.getOptionChain
 
-lapply(list.tickers, head) -> list.tickers.sample
-
+# Dados de opções do Yahoo Finaças via getOptionChain (versão vetorizada)
+# Escopo das opções = todas as opções disponíveis
 lapply(
-  list.tickers.sample
+  list.tickers
   , function(stocks){
     
     vectorized.getOptionChain(
       Symbols = stocks
-      , Exp = (list.prices$SP500$ref.date + months(1))
+      , Exp = NULL #Todas as opções disponíveis
+      # , Exp = glue('{year(DATA.inicial_2)}/{year(DATA.inicial_2) + 1}')
       , src = 'yahoo'
     )
     
   }) -> list.options
 
-Map(
-  function(stocks, sample){
-    
-    stocks %>% 
-      filter(
-        ticker %in% sample 
-      )
-    
-  }
-  , stocks = list.prices
-  , sample = list.tickers.sample
-) -> list.prices
-
-
-quantmod::getOptionChain(
-  Symbols = list.tickers$SP500 %>% head(.)
-  # , Exp = DATA.inicial_2 %>% year(.) %>% as.character(.)
-  , Exp = (list.prices$SP500$ref.date + months(1))
-  , src = 'yahoo'
-) -> list.options.USA
-
-
-
-list.prices$SP500 %>%
-  filter(
-    # ticker == 'AAPL'
-    ticker %in% head(list.tickers$SP500)
-    # , ref.date >= min(calls$LastTradeTime)
-    # , ref.date <= max(calls$LastTradeTime)
-  ) %>% 
-  mutate(
-    div.yield = 0 #Simplificação: supondo dividendos = 0 para todas
-  ) -> list.prices.USA
-
-list.options.USA %>% purrr::flatten(.) -> lalala
-
+# Ajustes na lista de opções
 lapply(
   list.options
   , function(options){
     
     options %>% 
-      purrr::flatten(.) -> options
+      # purrr::flatten(.) -> options
+      purrr::flatten(.) %>%
+      purrr::flatten_df(.) -> options
     
-    list(
-      options[-which(options %>% names(.) %in% c('calls', 'puts'))] %>% flatten_df(.)
-      , options[which(options %>% names(.) %in% c('calls', 'puts'))] %>% bind_rows(.)
-    ) %>% bind_rows(.) -> options
+    # list(
+    # options[-which(options %>% names(.) %in% c('calls', 'puts'))] %>% flatten_df(.) %>% bind_rows(.) -> options
+    # , options[which(options %>% names(.) %in% c('calls', 'puts'))] %>% bind_rows(.)
+    # ) %>% bind_rows(.) -> options
     
-    options %>% 
+    
+    options %>%
       as_tibble(rownames = 'contract') %>%
       dplyr::mutate(
         
@@ -358,41 +302,18 @@ lapply(
     
   }) -> list.options
 
-
-list.options$SP500 %>% View(.)
-
-list(
-  lalala[-which(lalala %>% names(.) %in% c('calls', 'puts'))] %>% flatten_df(.)
-  , lalala[which(lalala %>% names(.) %in% c('calls', 'puts'))] %>% bind_rows(.)
-) %>% bind_rows(.) -> lalala
-
-lalala %>% 
-  as_tibble(rownames = 'contract') %>%
-  dplyr::mutate(
-    
-    exp.date = parse_number(contract)
-    , exp.date = as.character(exp.date)
-    , exp.date = ymd(exp.date)
-    
-    , ticker = str_remove_all(contract, '[:digit:]')
-    , opt.type = str_sub(ticker, start = -1)
-    , ticker = str_sub(ticker, end = -2)
-    
-    , is.put.opt = ifelse(opt.type == 'P', yes = T, no = F)
-    
-    , ref.date = as_date(LastTradeTime)
-    
-    , time.to.exp = time_length(exp.date - ref.date, unit = 'days')
-    , time.to.exp.yrs = time.to.exp/252
-    
-  ) -> lalala
-
+# Lista de data frames final: 
+# Preços, dividendos, taxas livre de risco, opções (call e put) e datas de vencimento das opções
 Map(
   function(options, prices, risk.free){
     
     options %>% 
       full_join(prices) %>%
       left_join(risk.free) %>%
+      mutate(
+        total.div.12m = replace_na(total.div.12m, 0)
+        , div.yield = total.div.12m/price.close
+      ) %>%
       fill(
         risk.free.rate
         , .direction = 'downup'
@@ -406,28 +327,7 @@ Map(
 ) -> list.final
 
 
-list.prices.USA %>% 
-  full_join(lalala) %>% 
-  left_join(list.risk.free$SP500) %>% 
-  fill(
-    DGS3MO
-    , .direction = 'downup'
-  ) -> lalala
-
-
 # 3. MODELOS --------------------------------------------------------------
-# TypeFlag = “c” for call or “p” for put
-# 
-# [pronto] S = current or starting stock price
-# 
-# [pronto] X = strike price. The function uses X instead of K.
-# 
-# [printo] Time = time to expiration in years
-# 
-# [pronto] r = risk free interest rate
-# 
-# [quase] sigma = volatility of the stock
-
 # Modelo Binomial vetorizado
 Vectorize(
   derivmkts::binomopt
@@ -443,7 +343,7 @@ Vectorize(
     )
 ) -> vectorized.binomopt
 
-# Modelo Black-Scholes (preço da call)
+# Modelo Black-Scholes (preço da call) vetorizado
 Vectorize(
   derivmkts::bscall
   , vectorize.args = 
@@ -457,7 +357,7 @@ Vectorize(
     )
 ) -> vectorized.bscall
 
-# Modelo Black-Scholes (preço da put)
+# Modelo Black-Scholes (preço da put) vetorizado
 Vectorize(
   derivmkts::bsput
   , vectorize.args = 
@@ -471,7 +371,7 @@ Vectorize(
     )
 ) -> vectorized.bsput
 
-
+# Precificação das opções pelo Modelo Binomial e Black-Scholes
 lapply(
   list.final
   , function(options){
@@ -479,8 +379,8 @@ lapply(
     options %>%
       mutate(
         opt.price.binom.ame = vectorized.binomopt(
-          american = T
-          , putopt = is.put.opt
+          american = T #Opção americana
+          , putopt = is.put.opt #Put ou Call
           , s = price.close #stock price
           , k = Strike #strike price
           , tt = time.to.exp.yrs #time to expiration
@@ -491,8 +391,8 @@ lapply(
         )
         
         , opt.price.binom.eur = vectorized.binomopt(
-          american = F
-          , putopt = is.put.opt
+          american = F #Opção européia
+          , putopt = is.put.opt #Put ou Call
           , s = price.close #stock price
           , k = Strike #strike price
           , tt = time.to.exp.yrs #time to expiration
@@ -503,8 +403,8 @@ lapply(
         )
         
         , opt.price.bs = ifelse(
-          is.put.opt
-          , yes = vectorized.bsput(
+          is.put.opt #Put ou Call
+          , yes = vectorized.bsput(#Put
             s = price.close #stock price
             , k = Strike #strike price
             , tt = time.to.exp.yrs #time to expiration
@@ -512,7 +412,7 @@ lapply(
             , v = volatility #volatility
             , d = div.yield #dividend yield
           )
-          , no = vectorized.bscall(
+          , no = vectorized.bscall(#Call
             s = price.close #stock price
             , k = Strike #strike price
             , tt = time.to.exp.yrs #time to expiration
@@ -525,56 +425,7 @@ lapply(
     
   }) -> list.final
 
-
-lalala %>% 
-  mutate(
-    opt.price.binom.ame = vectorized.binomopt(
-      american = T
-      , putopt = is.put.opt
-      , s = price.close #stock price
-      , k = Strike #strike price
-      , tt = time.to.exp.yrs #time to expiration
-      , r = DGS3MO #risk free rate
-      , v = volatility #volatility
-      , d = div.yield #dividend yield
-      , nstep = 10
-    )
-    
-    , opt.price.binom.eur = vectorized.binomopt(
-      american = F
-      , putopt = is.put.opt
-      , s = price.close #stock price
-      , k = Strike #strike price
-      , tt = time.to.exp.yrs #time to expiration
-      , r = DGS3MO #risk free rate
-      , v = volatility #volatility
-      , d = div.yield #dividend yield
-      , nstep = 10
-    )
-    
-    , opt.price.bs = ifelse(
-      is.put.opt
-      , yes = vectorized.bsput(
-        s = price.close #stock price
-        , k = Strike #strike price
-        , tt = time.to.exp.yrs #time to expiration
-        , r = DGS3MO #risk free rate
-        , v = volatility #volatility
-        , d = div.yield #dividend yield
-      )
-      , no = vectorized.bscall(
-        s = price.close #stock price
-        , k = Strike #strike price
-        , tt = time.to.exp.yrs #time to expiration
-        , r = DGS3MO #risk free rate
-        , v = volatility #volatility
-        , d = div.yield #dividend yield
-      )
-    )
-  ) -> lalala
-
-
-# Upside e recomendação
+# Upside e estratégia recomendada
 lapply(
   list.final
   , function(options){
@@ -582,16 +433,16 @@ lapply(
     options %>% 
       mutate(
         across(#Upside
-          .cols = starts_with('opt.price')
-          ,.fns = function(x){x - Ask} #Upside = o preço justo (valuation) - o quanto estão pedindo (Ask)
+          .cols = starts_with('opt.price') #Modelo de apreçamento estimados
+          ,.fns = function(x){(x/Ask) - 1} #Upside = 'preço justo' (valuation) vs o quanto estão pedindo (Ask)
           ,.names = 'upside.{.col}'
         )
         , across(#Estratégia recomendada
-          .cols = starts_with('upside')
+          .cols = starts_with('upside') 
           ,.fns = function(x){
             case_when(
-              x > 0 ~ 'Buy'
-              , x < 0 ~ 'Sell'
+              x > 0 ~ 'Buy' #Upside positivo: 'preço justo' da opção > preço de mercado => Opção subvalorizada => Compra
+              , x < 0 ~ 'Sell' #Upside negativo: 'preço justo' da opção < preço de mercado => Opção sobrevalorizada => Venda
             )}
           ,.names = 'strategy.{.col}'
         )
@@ -612,64 +463,118 @@ lapply(
   }) -> list.final
 
 
-lalala %>% 
-  mutate(
-    across(#Upside
-      .cols = starts_with('opt.price')
-      ,.fns = function(x){x - Ask} #Upside = o preço justo (valuation) - o quanto estão pedindo (Ask)
-      ,.names = 'upside.{.col}'
-    )
-    , across(#Estratégia recomendada
-      .cols = starts_with('upside')
-      ,.fns = function(x){
-        case_when(
-          x > 0 ~ 'Buy'
-          , x < 0 ~ 'Sell'
-        )}
-      ,.names = 'strategy.{.col}'
-    )
-  ) %>% 
-  rename_with(#Ajuste nos nomes das variáveis
-    .cols = starts_with('upside')
-    , .fn = function(x){x %>% str_remove('opt.price.')}
-  ) %>%
-  rename_with(#Ajuste nos nomes das variáveis
-    .cols = starts_with('strategy.')
-    , .fn = function(x){
-      x %>% 
-        str_remove('opt.price.') %>%
-        str_remove('upside.')
-    }
-  ) -> lalala
-
-
-# Modelos não inclusos nesta avaliação
+# Modelos não inclusos nesta avaliação:
 # Opções asiáticas
-# derivmkts::geomasianmc()
-# fOptions::MonteCarloOption()
-# fOptions::NDF()
-# Outras opções ainda, mas por simplicidade, optei apenas por binomial e Black-Scholes
+# # derivmkts::geomasianmc()
+# Opção de Monte Carlo
+# # fOptions::MonteCarloOption()
+# Non Deliverable Forward (Moeda)
+# # fOptions::NDF()
+# Outras opções ainda, mas por simplicidade e concisão, calcula-se apenas por binomial e Black-Scholes
+
 
 # 3. ADENDO: GUIDE -----------------------------------------------------------
 GUIDE()
 
 # 4. VISUALIZAÇÃO ---------------------------------------------------------
+theme_set(ggthemes::theme_economist(base_size = 14))
+theme_set(theme_bw())
 
+# Ilustração com único ativo
+# Cotações das ações (preço de fechamento)
+list.final$SP500 %>% 
+  filter(
+    ticker == list.tickers$SP500[1]
+  ) %>% 
+  ggplot(
+    aes(
+      x = ref.date
+      , y = price.close
+    )) + 
+  tidyquant::geom_candlestick(
+    aes(
+      open = price.open
+      , high = price.high
+      , low = price.low
+      , close = price.close
+    )) + 
+  # tidyquant::geom_ma(color = '#0A0A0A') +
+  scale_y_continuous(labels = scales::label_dollar()) + 
+  labs(
+    title = glue("{list.tickers$SP500[1]}: {str_replace_all(DATA.inicial_2,'-','/')} - {str_replace_all(DATA.final,'-','/')}")
+    , x = 'Date'
+    , y = 'Price (USD)'
+  ) -> plot.prices.candle
 
-# naniar::vis_miss()
+list.final$SP500 %>% 
+  filter(
+    ticker == list.tickers$SP500[1]
+  ) %>%
+  ggplot(
+    aes(
+      x = ref.date
+      , y = price.close
+    )) + 
+  geom_line(
+    color = '#0A0A0A'
+    , size = .75
+  ) + 
+  scale_y_continuous(labels = scales::label_dollar()) + 
+  labs(
+    title = glue("{list.tickers$SP500[1]}: {str_replace_all(DATA.inicial_2,'-','/')} - {str_replace_all(DATA.final,'-','/')}")
+    , x = 'Date'
+    , y = 'Price (USD)'
+  ) -> plot.prices.line
 
+# Dividend Yield das ações
+list.final$SP500 %>% 
+  filter(
+    ticker == list.tickers$SP500[1]
+  ) %>%
+  # select(div.yield) %>% summary()
+  ggplot(
+    aes(
+      x = ref.date
+      , y = div.yield
+    )) + 
+  geom_line(
+    color = '#0A0A0A'
+    , size = .75
+  ) + 
+  scale_y_continuous(labels = scales::percent_format()) + 
+  labs(
+    title = glue("{list.tickers$SP500[1]}: {str_replace_all(DATA.inicial_2,'-','/')} - {str_replace_all(DATA.final,'-','/')}")
+    , x = 'Date'
+    , y = 'Dividend Yield'
+  ) -> plot.div.yield
 
-# ANÁLISE SETORIAL?
+# 'Preço justo' via Modelo Binomial e Black-Scholes
+list.final$SP500 %>% 
+  filter(
+    ticker == list.tickers$SP500[3]
+  ) %>% 
+  ggplot(
+    aes(
+      x = ref.date
+      , y = opt.price.binom.ame
+    )) + 
+  geom_line(size = .75) + 
+  # facet_wrap(facets = vars(opt.type)) + 
+  labs(
+    title = glue("{list.tickers$SP500[1]}: {str_replace_all(DATA.inicial_2,'-','/')} - {str_replace_all(DATA.final,'-','/')}")
+    , x = 'Date'
+    , y = 'Volatility'
+  ) -> plot.volatility
 
-# 3. PRECIFICAÇÃO DE OPÇÕES
-
-# fOptions::BinomialTreeOption()
-# fOptions::BinomialTreePlot
-
-# derivmkts::binomopt()
-# derivmkts::binomplot()
-
-
-# 4. VISUALIZAÇÃO
-
+list.final$SP500 %>%
+  mutate(
+    contract = factor(contract)
+  ) %>%
+  ggplot(
+    aes(
+      x = ref.date
+      , y = opt.price.binom.ame
+    )) + 
+  geom_line(size = .75) +
+  facet_wrap(facets = vars(contract))
 
