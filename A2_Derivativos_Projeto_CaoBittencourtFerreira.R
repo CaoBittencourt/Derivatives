@@ -21,12 +21,12 @@ mutate <- dplyr::mutate
 
 
 # 2. CURIOSIDADE: GUIDE -----------------------------------------------------------
-# GUIDE()
+GUIDE()
 
 
 # 3. DADOS ----------------------------------------------------------------
 # Escopo dos preços = 1 ano (para permitir o cálculo do dividend yield 12m)
-DATA.inicial_1 <- Sys.Date() - months(12) - 22 #Para calcular a volatilidade anual sem gerar NA's na primeira data é necessário ter 22 dias a mais de dados no início (i.e. para calcular a rolling volatility de 22 dias)  
+DATA.inicial_1 <- Sys.Date() - months(12) - 22 #Para calcular a volatilidade anual sem gerar NA's na primeira data é necessário ter 22 dias a mais de dados no início (i.e. para calcular a rolling volatility de 22 dias)
 DATA.inicial_2 <- Sys.Date() - months(12)
 DATA.final <- Sys.Date()
 
@@ -327,6 +327,7 @@ lapply(
     
   }) -> list.options
 
+
 # Lista de data frames final: 
 # Preços, dividend yield, taxas livre de risco, opções (call e put) e datas de vencimento das opções
 Map(
@@ -622,7 +623,7 @@ df.opt.sample %>%
   ) -> plot.risk.free.rate
 
 # 'Preço justo' via Modelo Binomial e Black-Scholes
-df.opt.sample  %>% 
+df.opt.sample %>% 
   pivot_longer(
     cols = starts_with('opt.price')
     , names_to = 'opt.model'
